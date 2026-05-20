@@ -20,6 +20,7 @@ class PipelineIntegration: PipelineListener {
     static let EVENT_ZOMBIE_DETECTED     = "PipelineZombieDetected"
     static let EVENT_UNDERRUN            = "PipelineUnderrun"
     static let EVENT_DRAINED             = "PipelineDrained"
+    static let EVENT_PLAYBACK_STOPPED    = "PipelinePlaybackStopped"
     static let EVENT_AUDIO_FOCUS_LOST    = "PipelineAudioFocusLost"
     static let EVENT_AUDIO_FOCUS_RESUMED = "PipelineAudioFocusResumed"
     static let EVENT_FREQUENCY_BANDS    = "PipelineFrequencyBands"
@@ -152,6 +153,11 @@ class PipelineIntegration: PipelineListener {
         return pipeline?.getState().rawValue ?? PipelineState.idle.rawValue
     }
 
+    /// Current platform output latency in milliseconds. Returns 0 if not connected.
+    func outputLatencyMs() -> Double {
+        return pipeline?.outputLatencyMs() ?? 0
+    }
+
     /// Register the pipeline as a delegate on the shared engine.
     /// Called by the module after connect() so route changes and interruptions
     /// are forwarded to the AudioPipeline instance.
@@ -204,6 +210,10 @@ class PipelineIntegration: PipelineListener {
 
     func onDrained(turnId: String) {
         sendEvent(PipelineIntegration.EVENT_DRAINED, ["turnId": turnId])
+    }
+
+    func onPlaybackStopped(turnId: String) {
+        sendEvent(PipelineIntegration.EVENT_PLAYBACK_STOPPED, ["turnId": turnId])
     }
 
     func onAudioFocusLost() {

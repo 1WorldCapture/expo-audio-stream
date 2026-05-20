@@ -103,6 +103,22 @@ export class Pipeline {
     return ExpoPlayAudioStreamModule.getPipelineTelemetry() as PipelineTelemetry;
   }
 
+  /**
+   * Query the platform's current output latency — i.e., how long after a
+   * sample is written to the native buffer before it actually leaves the
+   * speaker.
+   *
+   * Value can change mid-session, notably on audio route changes such as
+   * switching from built-in speaker to Bluetooth (Bluetooth typically adds
+   * 100+ ms). **Always query at the moment you care; do not cache.**
+   *
+   * Returns 0 if the pipeline is not connected or the platform cannot
+   * report a value.
+   */
+  static getOutputLatencyMs(): number {
+    return ExpoPlayAudioStreamModule.getPipelineOutputLatencyMs() as number;
+  }
+
   // ════════════════════════════════════════════════════════════════════════
   // Event subscriptions
   // ════════════════════════════════════════════════════════════════════════
@@ -211,6 +227,7 @@ export type {
   PipelineZombieDetectedEvent,
   PipelineUnderrunEvent,
   PipelineDrainedEvent,
+  PipelinePlaybackStoppedEvent,
   PipelineAudioFocusLostEvent,
   PipelineAudioFocusResumedEvent,
 } from './types';

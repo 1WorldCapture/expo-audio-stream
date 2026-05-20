@@ -90,6 +90,7 @@ class PipelineIntegration(
         const val EVENT_ZOMBIE_DETECTED    = "PipelineZombieDetected"
         const val EVENT_UNDERRUN           = "PipelineUnderrun"
         const val EVENT_DRAINED            = "PipelineDrained"
+        const val EVENT_PLAYBACK_STOPPED   = "PipelinePlaybackStopped"
         const val EVENT_AUDIO_FOCUS_LOST   = "PipelineAudioFocusLost"
         const val EVENT_AUDIO_FOCUS_RESUMED = "PipelineAudioFocusResumed"
         const val EVENT_FREQUENCY_BANDS = "PipelineFrequencyBands"
@@ -248,6 +249,13 @@ class PipelineIntegration(
     }
 
     /**
+     * Current platform output latency in milliseconds. Returns 0 if not connected.
+     */
+    fun outputLatencyMs(): Double {
+        return pipeline?.outputLatencyMs() ?: 0.0
+    }
+
+    /**
      * Log AudioTrack health — called from the device callback to capture
      * track state at the moment of a route change.
      */
@@ -301,6 +309,12 @@ class PipelineIntegration(
 
     override fun onDrained(turnId: String) {
         sendEvent(EVENT_DRAINED, Bundle().apply {
+            putString("turnId", turnId)
+        })
+    }
+
+    override fun onPlaybackStopped(turnId: String) {
+        sendEvent(EVENT_PLAYBACK_STOPPED, Bundle().apply {
             putString("turnId", turnId)
         })
     }

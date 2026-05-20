@@ -49,6 +49,7 @@ interface PipelineListener {
     fun onZombieDetected(playbackHead: Long, stalledMs: Long)
     fun onUnderrun(count: Int)
     fun onDrained(turnId: String)
+    fun onPlaybackStopped(turnId: String)
     fun onAudioFocusLost()
     fun onAudioFocusResumed()
     fun onFrequencyBands(low: Float, mid: Float, high: Float)
@@ -214,6 +215,13 @@ class AudioPipeline(
     // ── Underrun debounce ───────────────────────────────────────────────
     private var lastReportedUnderrunCount = 0
 
+    /**
+     * Pending PlaybackStopped runnable scheduled on [mainHandler] — cancelled
+     * on new turn / invalidateTurn / disconnect. All mutations of this field
+     * MUST happen on the main thread to avoid races with the timer firing.
+     */
+    private var pendingPlaybackStoppedRunnable: Runnable? = null
+
     // ── Frequency band analysis ──────────────────────────────────────
     private var frequencyBandAnalyzer: FrequencyBandAnalyzer? = null
     private var frequencyBandExecutor: java.util.concurrent.ScheduledExecutorService? = null
@@ -227,6 +235,8 @@ class AudioPipeline(
     val totalPushCalls = AtomicLong(0)
     val totalPushBytes = AtomicLong(0)
     val totalWriteLoops = AtomicLong(0)
+    /** Frames successfully written to AudioTrack (one frame per sample-time across all channels). */
+    private val framesWritten = AtomicLong(0)
 
     // ════════════════════════════════════════════════════════════════════
     // Connect / Disconnect
@@ -321,6 +331,9 @@ class AudioPipeline(
      * `WRITE_BLOCKING` call, then joins the thread.
      */
     fun disconnect() {
+        // Cancel any pending PlaybackStopped dispatch before tearing down.
+        cancelPendingPlaybackStopped()
+
         running.set(false)
 
         // Stop zombie detection
@@ -407,6 +420,7 @@ class AudioPipeline(
                 pendingFlush.set(true)
                 setState(PipelineState.STREAMING)
                 frequencyBandAnalyzer?.reset()
+                cancelPendingPlaybackStopped()
             }
 
             // ── Decode base64 → PCM shorts ──────────────────────────────
@@ -451,6 +465,7 @@ class AudioPipeline(
             lastReportedUnderrunCount = 0
             setState(PipelineState.IDLE)
             frequencyBandAnalyzer?.reset()
+            cancelPendingPlaybackStopped()
         }
     }
 
@@ -477,6 +492,37 @@ class AudioPipeline(
             putString("turnId", currentTurnId ?: "")
         }
         return bundle
+    }
+
+    /**
+     * Current platform output latency in milliseconds — i.e., how long after
+     * a sample is written before it physically leaves the speaker.
+     *
+     * Uses [AudioTrack.getTimestamp] to compute frames still in flight, then
+     * converts to ms. Falls back to a conservative HAL-buffer estimate when
+     * the timestamp call returns false (notably during initial buffering or
+     * on bad audio routes).
+     *
+     * Returns 0 if the pipeline is not connected.
+     */
+    fun outputLatencyMs(): Double {
+        val track = audioTrack ?: return 0.0
+        val ts = android.media.AudioTimestamp()
+        val ok = try {
+            track.getTimestamp(ts)
+        } catch (e: IllegalStateException) {
+            false
+        }
+        if (ok) {
+            val inFlight = framesWritten.get() - ts.framePosition
+            if (inFlight > 0) {
+                return (inFlight.toDouble() / sampleRate.toDouble()) * 1000.0
+            }
+            return 0.0
+        }
+        // Fallback: assume the HAL holds ~2× minBuffer worth of frames.
+        val fallbackFrames = (minBufferBytes / 2 / channelCount) * 2
+        return (fallbackFrames.toDouble() / sampleRate.toDouble()) * 1000.0
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -534,6 +580,9 @@ class AudioPipeline(
                     listener.onError("WRITE_ERROR", "AudioTrack.write returned $errorName ($written)")
                     break
                 }
+                // Track frames written for output-latency computation.
+                // `written` is Int16-sample count; divide by channelCount for frames.
+                framesWritten.addAndGet((written / channelCount).toLong())
             } catch (e: IllegalStateException) {
                 // Track was stopped/released — expected during disconnect
                 if (running.get()) {
@@ -561,7 +610,10 @@ class AudioPipeline(
 
             // ── Drain detection ─────────────────────────────────────────
             if (buf.isDrained() && state == PipelineState.DRAINING) {
-                currentTurnId?.let { listener.onDrained(it) }
+                currentTurnId?.let { tid ->
+                    listener.onDrained(tid)
+                    schedulePlaybackStopped(tid)
+                }
                 setState(PipelineState.IDLE)
             }
         }
@@ -772,6 +824,43 @@ class AudioPipeline(
     // Internal helpers
     // ════════════════════════════════════════════════════════════════════
 
+    /**
+     * Schedule a `PlaybackStopped` callback approximately [outputLatencyMs]
+     * milliseconds after `Drained`. Cancels any previously pending dispatch.
+     *
+     * Called from the write thread; the actual cancellation/scheduling and
+     * invocation happen on the main thread so we never race ourselves.
+     */
+    private fun schedulePlaybackStopped(turnId: String) {
+        val latencyMs = outputLatencyMs().toLong()
+        mainHandler.post {
+            pendingPlaybackStoppedRunnable?.let { mainHandler.removeCallbacks(it) }
+
+            val runnable = Runnable {
+                pendingPlaybackStoppedRunnable = null
+                listener.onPlaybackStopped(turnId)
+            }
+            pendingPlaybackStoppedRunnable = runnable
+
+            if (latencyMs > 0) {
+                mainHandler.postDelayed(runnable, latencyMs)
+            } else {
+                mainHandler.post(runnable)
+            }
+        }
+    }
+
+    /**
+     * Cancel any pending PlaybackStopped dispatch. Posts to [mainHandler] so
+     * all mutations of [pendingPlaybackStoppedRunnable] are on one thread.
+     */
+    private fun cancelPendingPlaybackStopped() {
+        mainHandler.post {
+            pendingPlaybackStoppedRunnable?.let { mainHandler.removeCallbacks(it) }
+            pendingPlaybackStoppedRunnable = null
+        }
+    }
+
     private fun setState(newState: PipelineState) {
         if (state == newState) return
         state = newState
@@ -787,6 +876,7 @@ class AudioPipeline(
         totalPushCalls.set(0)
         totalPushBytes.set(0)
         totalWriteLoops.set(0)
+        framesWritten.set(0)
         jitterBuffer?.resetTelemetry()
     }
 }

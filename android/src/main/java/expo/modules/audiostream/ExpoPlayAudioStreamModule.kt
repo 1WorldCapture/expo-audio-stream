@@ -101,6 +101,7 @@ class ExpoPlayAudioStreamModule : Module(), EventSender {
             PipelineIntegration.EVENT_ZOMBIE_DETECTED,
             PipelineIntegration.EVENT_UNDERRUN,
             PipelineIntegration.EVENT_DRAINED,
+            PipelineIntegration.EVENT_PLAYBACK_STOPPED,
             PipelineIntegration.EVENT_AUDIO_FOCUS_LOST,
             PipelineIntegration.EVENT_AUDIO_FOCUS_RESUMED,
             PipelineIntegration.EVENT_FREQUENCY_BANDS
@@ -192,6 +193,10 @@ class ExpoPlayAudioStreamModule : Module(), EventSender {
 
         Function("getPipelineState") {
             pipelineIntegration.getState()
+        }
+
+        Function("getPipelineOutputLatencyMs") {
+            pipelineIntegration.outputLatencyMs()
         }
 
     }

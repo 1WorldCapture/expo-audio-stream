@@ -200,6 +200,43 @@ The pipeline transitions from `draining` to `idle`.
 
 ---
 
+### `PipelinePlaybackStopped`
+
+Fired approximately `outputLatencyMs` after `PipelineDrained` for the same turn —
+i.e., when the last sample physically leaves the speaker. Pairs symmetrically
+with `PipelinePlaybackStarted` (start-of-emission ↔ end-of-emission).
+
+**Distinct from `state: 'idle'`:** that's the pipeline-state-machine value
+reported via `PipelineStateChanged`. `PipelinePlaybackStopped` is a
+physical-world milestone about audible audio, not a state-machine transition.
+
+| Field | Type | Notes |
+|---|---|---|
+| `turnId` | `string` | The turn whose last sample just stopped emitting |
+
+**Cancellation:** the scheduled dispatch is cancelled if a new turn starts,
+`invalidatePipelineTurn` is called, or the pipeline disconnects before the
+delay elapses. Consumers will not receive a late-arriving event mid-stream.
+
+**Approximation:** the delay uses `outputLatencyMs` captured at drain time.
+On iOS the value reflects `AVAudioSession.outputLatency` (total HW output
+latency). On Android it uses `AudioTrack.getTimestamp()` to compute frames
+in-flight, falling back to a HAL-buffer estimate if the timestamp call fails.
+A route change during the latency window (e.g. switch to Bluetooth mid-tail)
+is *not* re-measured — the captured value is used. The error is typically
+single-digit milliseconds and is acceptable for VAD-gating use cases.
+
+**Platform:** Android, iOS
+
+**JS response:**
+- Use this — not `PipelineDrained` — when you need to know when **mic-side
+  echo from the speaker is over**. Useful for voice-agent pipelines that
+  gate server-side VAD on the agent's own playback ending.
+- If you do not care about the physical-world emission boundary, prefer
+  `PipelineDrained` (cheaper, fires earlier).
+
+---
+
 ### `PipelineFrequencyBands`
 
 Fired at the interval configured by `frequencyBandIntervalMs` during pipeline

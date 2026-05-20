@@ -135,6 +135,20 @@ export interface PipelineDrainedEvent {
   turnId: string;
 }
 
+/**
+ * Payload for `PipelinePlaybackStopped`.
+ *
+ * Fired when the last sample physically leaves the speaker, approximately
+ * `outputLatencyMs` after `PipelineDrained` for the same turn. Pairs with
+ * `PipelinePlaybackStarted` (start-of-emission ↔ end-of-emission).
+ *
+ * Note: this is a physical-world milestone, distinct from `state: 'idle'`
+ * (the pipeline-state-machine value reported via `PipelineStateChanged`).
+ */
+export interface PipelinePlaybackStoppedEvent {
+  turnId: string;
+}
+
 /** Payload for `PipelineAudioFocusLost` (empty — presence is the signal). */
 export type PipelineAudioFocusLostEvent = Record<string, never>;
 
@@ -155,6 +169,7 @@ export interface PipelineEventMap {
   PipelineZombieDetected: PipelineZombieDetectedEvent;
   PipelineUnderrun: PipelineUnderrunEvent;
   PipelineDrained: PipelineDrainedEvent;
+  PipelinePlaybackStopped: PipelinePlaybackStoppedEvent;
   PipelineAudioFocusLost: PipelineAudioFocusLostEvent;
   PipelineAudioFocusResumed: PipelineAudioFocusResumedEvent;
   PipelineFrequencyBands: PipelineFrequencyBandsEvent;

@@ -17,6 +17,7 @@ protocol PipelineListener: AnyObject {
     func onZombieDetected(stalledMs: Int64)
     func onUnderrun(count: Int)
     func onDrained(turnId: String)
+    func onPlaybackStopped(turnId: String)
     func onAudioFocusLost()
     func onAudioFocusResumed()
     func onFrequencyBands(low: Float, mid: Float, high: Float)
@@ -83,6 +84,10 @@ class AudioPipeline: SharedAudioEngineDelegate {
     /// Completion handlers capture the generation at scheduling time and bail if it's stale.
     /// This prevents duplicate chains and stale callbacks from re-entering after a rebuild.
     private var scheduleGeneration: Int = 0
+
+    /// Pending PlaybackStopped dispatch — cancelled on new turn / disconnect.
+    /// Always mutate from the main queue to avoid races with the drain timer.
+    private var pendingPlaybackStoppedWork: DispatchWorkItem?
 
     // ── Timers ──────────────────────────────────────────────────────────
     private var stateTimer: DispatchSourceTimer?
@@ -203,6 +208,11 @@ class AudioPipeline: SharedAudioEngineDelegate {
     }
 
     func disconnect() {
+        // Cancel any pending PlaybackStopped before tearing down.
+        // DispatchWorkItem.cancel is thread-safe; we may be on any queue here.
+        pendingPlaybackStoppedWork?.cancel()
+        pendingPlaybackStoppedWork = nil
+
         running = false
         // Invalidate all in-flight completion handlers before detaching.
         scheduleGeneration += 1
@@ -365,6 +375,9 @@ class AudioPipeline: SharedAudioEngineDelegate {
             lastReportedUnderrunCount = 0
             setState(.streaming)
             frequencyBandAnalyzer?.reset()
+            DispatchQueue.main.async { [weak self] in
+                self?.cancelPendingPlaybackStopped()
+            }
         }
 
         // ── Decode base64 → PCM shorts ──────────────────────────────────
@@ -407,6 +420,9 @@ class AudioPipeline: SharedAudioEngineDelegate {
         lastReportedUnderrunCount = 0
         setState(.idle)
         frequencyBandAnalyzer?.reset()
+        DispatchQueue.main.async { [weak self] in
+            self?.cancelPendingPlaybackStopped()
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -431,6 +447,18 @@ class AudioPipeline: SharedAudioEngineDelegate {
             "totalScheduledBuffers": totalScheduledBuffers,
             "turnId": currentTurnId ?? ""
         ]
+    }
+
+    /// Current platform output latency in milliseconds.
+    ///
+    /// Reads `AVAudioSession.sharedInstance().outputLatency`. The value
+    /// reflects total HW output latency to the speaker and changes on
+    /// audio route changes (built-in vs. Bluetooth vs. wired).
+    ///
+    /// Returns 0 if not running.
+    func outputLatencyMs() -> Double {
+        guard running else { return 0 }
+        return AVAudioSession.sharedInstance().outputLatency * 1000.0
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -548,9 +576,46 @@ class AudioPipeline: SharedAudioEngineDelegate {
         if buf.isDrained() && currentState == .draining {
             if let tid = turnId {
                 listener?.onDrained(turnId: tid)
+                schedulePlaybackStopped(turnId: tid)
             }
             setState(.idle)
         }
+    }
+
+    /// Schedule a `PlaybackStopped` event approximately `outputLatencyMs`
+    /// after `Drained`. Cancels any previously pending dispatch.
+    ///
+    /// Approximation note: at drain detection, up to `PRE_SCHEDULE_COUNT`
+    /// pre-scheduled buffers may still be in the player node's chain — but
+    /// they read silence from the empty jitter buffer, so the last audible
+    /// sample stops emitting roughly `outputLatency` after this point.
+    private func schedulePlaybackStopped(turnId: String) {
+        pendingPlaybackStoppedWork?.cancel()
+        pendingPlaybackStoppedWork = nil
+
+        let latencyMs = outputLatencyMs()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.pendingPlaybackStoppedWork = nil
+            self.listener?.onPlaybackStopped(turnId: turnId)
+        }
+        pendingPlaybackStoppedWork = work
+
+        if latencyMs > 0 {
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(Int(latencyMs.rounded())),
+                execute: work
+            )
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
+    }
+
+    /// Cancel any pending PlaybackStopped dispatch. Call from turn-boundary
+    /// transitions (new pushAudio, invalidateTurn) and disconnect.
+    private func cancelPendingPlaybackStopped() {
+        pendingPlaybackStoppedWork?.cancel()
+        pendingPlaybackStoppedWork = nil
     }
 
     // ════════════════════════════════════════════════════════════════════

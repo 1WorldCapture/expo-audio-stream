@@ -268,6 +268,7 @@ export type {
   PipelineZombieDetectedEvent,
   PipelineUnderrunEvent,
   PipelineDrainedEvent,
+  PipelinePlaybackStoppedEvent,
   PipelineAudioFocusLostEvent,
   PipelineAudioFocusResumedEvent,
 } from "./pipeline";

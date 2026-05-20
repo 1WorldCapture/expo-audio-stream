@@ -48,6 +48,7 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
             PipelineIntegration.EVENT_ZOMBIE_DETECTED,
             PipelineIntegration.EVENT_UNDERRUN,
             PipelineIntegration.EVENT_DRAINED,
+            PipelineIntegration.EVENT_PLAYBACK_STOPPED,
             PipelineIntegration.EVENT_AUDIO_FOCUS_LOST,
             PipelineIntegration.EVENT_AUDIO_FOCUS_RESUMED,
             PipelineIntegration.EVENT_FREQUENCY_BANDS,
@@ -256,6 +257,10 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
 
         Function("getPipelineState") { () -> String in
             return self.pipelineIntegration.getState()
+        }
+
+        Function("getPipelineOutputLatencyMs") { () -> Double in
+            return self.pipelineIntegration.outputLatencyMs()
         }
     }
 
