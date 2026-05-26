@@ -9,6 +9,9 @@ jsconfig.json
 # Xcode
 #
 build/
+
+# SwiftPM
+.build/
 *.pbxuser
 !default.pbxuser
 *.mode1v3

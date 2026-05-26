@@ -74,7 +74,21 @@ class Microphone {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     guard let self = self, let settings = self.recordingSettings else { return }
 
-                    _ = startRecording(settings: self.recordingSettings!, intervalMilliseconds: 100, frequencyBandConfig: self.frequencyBandConfig)
+                    let result = self.startRecording(
+                        settings: settings,
+                        intervalMilliseconds: self.lastIntervalMs,
+                        frequencyBandConfig: self.frequencyBandConfig
+                    )
+                    if let error = result?.error {
+                        // Silent failure here would leave the consumer's UI
+                        // showing "recording" while the native engine is dead.
+                        // Surface a terminal error matching the interruption
+                        // resume path's RESUME_FAILED.
+                        self.delegate?.onMicrophoneError(
+                            "RESTART_FAILED",
+                            "Could not restart microphone after route change: \(error)"
+                        )
+                    }
                 }
             }
         case .categoryChange:
