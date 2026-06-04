@@ -339,28 +339,43 @@ class AudioRecorderManager(
                     consecutiveErrors++
                     if (consecutiveErrors >= 10) {
                         Log.e(Constants.TAG, "Too many consecutive read errors ($consecutiveErrors), stopping")
-                        emitRecordingError("READ_ERROR", "AudioRecord read failed after $consecutiveErrors consecutive errors")
+                        emitRecordingError("READ_ERROR", "AudioRecord read failed after $consecutiveErrors consecutive errors", isFatal = true)
                         break
                     }
                 }
             }
         } catch (e: Exception) {
             Log.e(Constants.TAG, "Recording thread crashed", e)
-            emitRecordingError("RECORDING_CRASH", e.message ?: "Recording thread unexpected error")
+            emitRecordingError("RECORDING_CRASH", e.message ?: "Recording thread unexpected error", isFatal = true)
         }
     }
 
     /**
      * Sends a recording error event to JS so the caller can react.
      */
-    private fun emitRecordingError(code: String, message: String) {
+    private fun emitRecordingError(
+        code: String,
+        message: String,
+        isFatal: Boolean,
+        autoResuming: Boolean = false
+    ) {
         mainHandler.post {
             try {
+                // Backward-compat: keep the error variant on AudioData for existing consumers
                 eventSender.sendExpoEvent(
                     Constants.AUDIO_EVENT_NAME, bundleOf(
                         "error" to code,
                         "errorMessage" to message,
                         "streamUuid" to streamUuid
+                    )
+                )
+                // Rich structured channel for new consumers
+                eventSender.sendExpoEvent(
+                    Constants.MICROPHONE_ERROR_EVENT_NAME, bundleOf(
+                        "code" to code,
+                        "message" to message,
+                        "isFatal" to isFatal,
+                        "autoResuming" to autoResuming
                     )
                 )
             } catch (e: Exception) {

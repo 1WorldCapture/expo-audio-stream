@@ -9,8 +9,7 @@ including payload shapes, trigger conditions, and recommended JS responses.
 
 ### `AudioData`
 
-Emitted at the configured interval during microphone recording. Also doubles as
-the recording error channel.
+Emitted at the configured interval during microphone recording.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -27,19 +26,21 @@ the recording error channel.
 
 **Error variant** (same event name, different shape):
 
+> Errors are also emitted on the richer `MicrophoneError` event (see below).
+> This variant is kept for backward compatibility.
+
 | Field | Type | Notes |
 |---|---|---|
-| `error` | `string` | Error code: `READ_ERROR`, `RECORDING_CRASH` |
+| `error` | `string` | Error code — see `MicrophoneError` section for full table |
 | `errorMessage` | `string` | Human-readable description |
-| `streamUuid` | `string` | Stream that errored |
+| `streamUuid` | `string` | Stream ID (Android only; `""` on iOS) |
 
 **Platform:** Android, iOS
 
 **JS response:**
 - Forward the base64 PCM to your STT pipeline or WebSocket.
 - Use `soundLevel` for VAD or UI visualisation.
-- Check for the `error` field before assuming the payload is audio data.
-  On error, stop the conversation turn or retry.
+- Prefer subscribing via `addMicrophoneErrorListener` — it receives the structured `MicrophoneError` event with `isFatal` and `autoResuming` fields.
 
 ---
 
@@ -59,6 +60,59 @@ wired headset/headphones, USB headset).
   recording, switch to speaker, or show a UI prompt.
 - `newDeviceAvailable`: a device was plugged in. May want to re-route audio or
   update UI to reflect the new output device.
+
+---
+
+### `MicrophoneError`
+
+Fired on every microphone error alongside the backward-compatible `AudioData`
+error variant. Carries structured `isFatal` and `autoResuming` fields decided
+by native code.
+
+**OTA safe:** apps can subscribe to this event before the native binary
+includes it — old native simply never emits it, so the listener is never
+called. Apps using the `AudioData` error variant continue to work unchanged.
+
+| Field | Type | Notes |
+|---|---|---|
+| `code` | `string` | Error code (see table below) |
+| `message` | `string` | Human-readable description including any underlying system error |
+| `isFatal` | `boolean` | `true` = recording has stopped; caller must call `stopMicrophone()` and reconnect |
+| `autoResuming` | `boolean` | `true` = library will reinstall the tap automatically (`INTERRUPTED` only) |
+
+**Error code reference:**
+
+| Code | Platform | `isFatal` | `autoResuming` | Meaning | Recommended action |
+|------|----------|-----------|----------------|---------|-------------------|
+| `INTERRUPTED` | iOS | false | true | System interrupted the audio session | Show paused UI; do NOT stop — library auto-resumes |
+| `RESUME_FAILED` | iOS | true | false | System allowed resume but engine restart failed | `stopMicrophone()` then reconnect |
+| `RESTART_FAILED` | iOS | true | false | Route-change or engine-rebuild recovery failed | `stopMicrophone()` then reconnect |
+| `ENGINE_DIED` | iOS | true | false | SharedAudioEngine exhausted all recovery | `stopMicrophone()` + `disconnectPipeline()` then reconnect both |
+| `READ_ERROR` | iOS | false | false | Single empty buffer — transient, recording continues | Log for diagnostics; no action |
+| `READ_ERROR` | Android | true | false | `AudioRecord.read()` failed 10× consecutively | `stopMicrophone()` then reconnect |
+| `RECORDING_CRASH` | Android | true | false | Recording thread threw an unexpected exception | `stopMicrophone()` then reconnect |
+
+**Platform:** Android, iOS
+
+**JS response:**
+
+```typescript
+import { addMicrophoneErrorListener } from "@edkimmel/expo-audio-stream"
+
+const sub = addMicrophoneErrorListener((error) => {
+  if (error.isFatal) {
+    stopMicrophone()
+    if (error.code === "ENGINE_DIED") disconnectPipeline()
+    reconnect()
+  } else if (error.autoResuming) {
+    showPausedUI() // INTERRUPTED — library will reinstall tap automatically
+  }
+  // isFatal: false, autoResuming: false → READ_ERROR on iOS: log and ignore
+})
+
+// cleanup
+sub.remove()
+```
 
 ---
 

@@ -42,6 +42,7 @@ export type DeviceReconnectedEventPayload = {
 
 export const AudioEvents = {
   AudioData: "AudioData",
+  MicrophoneError: "MicrophoneError",
   DeviceReconnected: "DeviceReconnected",
 };
 
@@ -49,6 +50,33 @@ export function addAudioEventListener(
   listener: (event: AudioEventPayload) => Promise<void>
 ): EventSubscription {
   return (emitter as any).addListener("AudioData", listener);
+}
+
+export interface MicrophoneErrorEventPayload {
+  code: string;
+  message: string;
+  isFatal: boolean;
+  autoResuming: boolean;
+}
+
+/**
+ * Subscribe to the dedicated MicrophoneError native event.
+ *
+ * OTA safe: if the running native binary predates this feature, the event is
+ * never emitted and this listener is never called. Apps that also subscribe to
+ * AudioData errors via addAudioEventListener continue to work unchanged.
+ *
+ * @example
+ * const sub = addMicrophoneErrorListener((e) => {
+ *   if (e.isFatal) { stopMicrophone(); reconnect(); }
+ *   else if (e.autoResuming) { showPausedUI(); }
+ * })
+ * // cleanup: sub.remove()
+ */
+export function addMicrophoneErrorListener(
+  listener: (event: MicrophoneErrorEventPayload) => void
+): EventSubscription {
+  return (emitter as any).addListener("MicrophoneError", listener);
 }
 
 export function subscribeToEvent<T extends unknown>(

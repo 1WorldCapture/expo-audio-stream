@@ -3,6 +3,7 @@ import AVFoundation
 import ExpoModulesCore
 
 let audioDataEvent: String = "AudioData"
+let microphoneErrorEvent: String = "MicrophoneError"
 let deviceReconnectedEvent: String = "DeviceReconnected"
 
 
@@ -17,6 +18,7 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
         if _microphone == nil {
             _microphone = Microphone()
             _microphone?.delegate = self
+            _microphone?.sharedAudioEngine = sharedAudioEngine
         }
         return _microphone!
     }
@@ -41,6 +43,7 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
         // Defines event names that the module can send to JavaScript.
         Events([
             audioDataEvent,
+            microphoneErrorEvent,
             deviceReconnectedEvent,
             PipelineIntegration.EVENT_STATE_CHANGED,
             PipelineIntegration.EVENT_PLAYBACK_STARTED,
@@ -55,6 +58,9 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
         ])
 
         AsyncFunction("destroy") { (promise: Promise) in
+            // Stop the microphone before tearing down the engine so the tap is
+            // cleanly removed and the capture callback cannot fire on a dead node.
+            self._microphone?.stopRecording(resolver: nil)
             self._pipelineIntegration?.destroy()
             self._pipelineIntegration = nil
             self.sharedAudioEngine.teardown()
@@ -120,13 +126,17 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
                 pointsPerSecond: nil
             )
 
-            if !isAudioSessionInitialized {
-                do {
+            do {
+                if !isAudioSessionInitialized {
                     try ensureAudioSessionInitialized(settings: settings)
-                } catch {
-                    promise.reject("ERROR", "Failed to init audio session \(error.localizedDescription)")
-                    return
                 }
+                // Ensure the shared engine is configured so AEC is applied to mic audio.
+                if !self.sharedAudioEngine.isConfigured {
+                    try self.sharedAudioEngine.configure(playbackMode: .conversation)
+                }
+            } catch {
+                promise.reject("ERROR", "Failed to init audio session: \(error.localizedDescription)")
+                return
             }
 
             if let result = self.microphone.startRecording(settings: settings, intervalMilliseconds: interval, frequencyBandConfig: fbConfig) {
@@ -334,13 +344,20 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
         sendEvent(audioDataEvent, eventBody)
     }
 
-    func onMicrophoneError(_ error: String, _ errorMessage: String) {
-        let eventBody: [String: Any] = [
-            "error": error,
-            "errorMessage": errorMessage,
-            "streamUuid": ""
-        ]
-        sendEvent(audioDataEvent, eventBody)
+    func onMicrophoneError(_ error: MicrophoneErrorInfo) {
+        // Rich structured channel for new consumers
+        sendEvent(microphoneErrorEvent, [
+            "code": error.code,
+            "message": error.message,
+            "isFatal": error.isFatal,
+            "autoResuming": error.autoResuming,
+        ])
+        // Backward-compat: keep the error variant on AudioData for existing consumers
+        sendEvent(audioDataEvent, [
+            "error": error.code,
+            "errorMessage": error.message,
+            "streamUuid": "",
+        ])
     }
 
     func onDeviceReconnected(_ reason: AVAudioSession.RouteChangeReason) {

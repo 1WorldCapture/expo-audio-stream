@@ -30,6 +30,7 @@ import {
 
 import {
   addAudioEventListener,
+  addMicrophoneErrorListener,
   AudioEventPayload,
   AudioEvents,
   subscribeToEvent,
@@ -61,34 +62,18 @@ export class ExpoPlayAudioStream {
     try {
       const { onAudioStream, onError, ...options } = recordingConfig;
 
-      if (
-        (onAudioStream && typeof onAudioStream == "function") ||
-        (onError && typeof onError == "function")
-      ) {
-        subscription = addAudioEventListener(
-          async (event: AudioEventPayload) => {
-            const {
-              fileUri,
-              deltaSize,
-              totalSize,
-              position,
-              encoded,
-              soundLevel,
-              frequencyBands,
-              error,
-              errorMessage,
-            } = event;
-            if (error) {
-              onError?.({ code: error, message: errorMessage ?? "" });
-              return;
-            }
+      const subscriptions: EventSubscription[] = [];
+
+      if (onAudioStream && typeof onAudioStream === "function") {
+        subscriptions.push(
+          addAudioEventListener(async (event: AudioEventPayload) => {
+            const { fileUri, deltaSize, totalSize, position, encoded, soundLevel, frequencyBands, error } = event;
+            if (error) return; // handled by MicrophoneError subscription; ignore here
             if (!encoded) {
-              console.error(
-                `[ExpoPlayAudioStream] Encoded audio data is missing`
-              );
+              console.error(`[ExpoPlayAudioStream] Encoded audio data is missing`);
               throw new Error("Encoded audio data is missing");
             }
-            onAudioStream?.({
+            onAudioStream({
               data: encoded,
               position,
               fileUri,
@@ -97,8 +82,20 @@ export class ExpoPlayAudioStream {
               soundLevel,
               frequencyBands,
             });
-          }
+          })
         );
+      }
+
+      if (onError && typeof onError === "function") {
+        subscriptions.push(
+          addMicrophoneErrorListener((event) => {
+            onError(event);
+          })
+        );
+      }
+
+      if (subscriptions.length > 0) {
+        subscription = { remove: () => subscriptions.forEach((s) => s.remove()) };
       }
 
       const result = await ExpoPlayAudioStreamModule.startMicrophone(options);
@@ -249,6 +246,8 @@ export {
 // Re-export Subscription type for backwards compatibility
 export type { EventSubscription } from "expo-modules-core";
 export type { Subscription } from "./events";
+export { addMicrophoneErrorListener } from "./events";
+export type { MicrophoneErrorEventPayload } from "./events";
 
 // Export native audio pipeline V3
 export { Pipeline } from "./pipeline";

@@ -140,6 +140,19 @@ export interface RecordingConfig {
 export interface MicrophoneErrorEvent {
   code: string;
   message: string;
+  /**
+   * True when the recording session has stopped and the caller must call
+   * stopMicrophone() and reconnect to resume. False for transient conditions
+   * where recording continues (READ_ERROR on iOS) or the library will
+   * auto-recover (INTERRUPTED + autoResuming: true).
+   */
+  isFatal: boolean;
+  /**
+   * True only when code is INTERRUPTED — the library is waiting for the
+   * system to return the audio session and will reinstall the tap
+   * automatically. Always false when isFatal is true.
+   */
+  autoResuming: boolean;
 }
 
 export interface Chunk {

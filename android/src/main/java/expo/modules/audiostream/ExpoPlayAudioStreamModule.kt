@@ -94,6 +94,7 @@ class ExpoPlayAudioStreamModule : Module(), EventSender {
 
         Events(
             Constants.AUDIO_EVENT_NAME,
+            Constants.MICROPHONE_ERROR_EVENT_NAME,
             Constants.DEVICE_RECONNECTED_EVENT_NAME,
             PipelineIntegration.EVENT_STATE_CHANGED,
             PipelineIntegration.EVENT_PLAYBACK_STARTED,
