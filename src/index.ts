@@ -68,7 +68,11 @@ export class ExpoPlayAudioStream {
         subscriptions.push(
           addAudioEventListener(async (event: AudioEventPayload) => {
             const { fileUri, deltaSize, totalSize, position, encoded, soundLevel, frequencyBands, error } = event;
-            if (error) return; // handled by MicrophoneError subscription; ignore here
+            // Only suppress AudioData error events when onError is wired up — the
+            // MicrophoneError subscription will handle them. Without onError (old
+            // integration or old native binary), fall through so the missing-encoded
+            // path below preserves the pre-v0.6.0 behavior.
+            if (error && onError) return;
             if (!encoded) {
               console.error(`[ExpoPlayAudioStream] Encoded audio data is missing`);
               throw new Error("Encoded audio data is missing");
