@@ -165,6 +165,10 @@ public class ExpoPlayAudioStreamModule: Module, MicrophoneDataDelegate, Pipeline
             microphone.toggleSilence(isSilent: isSilent)
         }
 
+        Function("setMicrophoneGain") { (gain: Double) in
+            microphone.setMicrophoneGain(Float(gain))
+        }
+
         // ── Pipeline functions ────────────────────────────────────────────
 
         AsyncFunction("connectPipeline") { (options: [String: Any], promise: Promise) in

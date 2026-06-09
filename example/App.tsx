@@ -40,6 +40,7 @@ export default function App() {
     message: string;
   } | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(-180)
   const [micBands, setMicBands] = useState<FrequencyBands | null>(null);
   const [pipelineBands, setPipelineBands] = useState<FrequencyBands | null>(null);
 
@@ -50,6 +51,7 @@ export default function App() {
   const pipelineSubsRef = useRef<{ remove: () => void }[]>([]);
 
   const chaosTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const gainRampRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const startChaosMonkey = () => {
     if (!chaosTimeoutRef.current) {
@@ -68,6 +70,7 @@ export default function App() {
     if (audio.frequencyBands) {
       setMicBands(audio.frequencyBands);
     }
+    setAudioLevel(audio.soundLevel ?? -180)
   };
 
   const onMicError = async(err: MicrophoneErrorEvent) => {
@@ -80,6 +83,7 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      if (gainRampRef.current) clearInterval(gainRampRef.current);
       ExpoPlayAudioStream.destroy().catch();
     };
   }, []);
@@ -93,7 +97,7 @@ export default function App() {
         targetBufferMs: 80,
         playbackMode: "conversation",
         frequencyBandIntervalMs: 100,
-        audioMode: "mixWithOthers", // try "duckOthers" or "doNotMix" to compare
+        audioMode: "doNotMix",
       });
       console.log("Pipeline connected:", result);
 
@@ -110,6 +114,27 @@ export default function App() {
         "PipelinePlaybackStarted",
         async (e) => {
           console.log("Pipeline playback started, turnId:", e.turnId);
+          // Drop mic to 20% immediately, then ramp linearly back to 100% over 1.5s
+          // to give the AEC adaptive filter time to converge before the mic is loud.
+          if (gainRampRef.current) clearInterval(gainRampRef.current);
+          ExpoPlayAudioStream.setMicrophoneGain(0.2);
+          console.debug(`[mic] gain ${0.2}`)
+          const RAMP_MS = 1500;
+          const TICK_MS = 50;
+          const startedAt = Date.now();
+          gainRampRef.current = setInterval(() => {
+            const elapsed = Date.now() - startedAt;
+            if (elapsed >= RAMP_MS) {
+              ExpoPlayAudioStream.setMicrophoneGain(1.0);
+              console.debug(`[mic] gain ${1}`)
+              clearInterval(gainRampRef.current);
+              gainRampRef.current = undefined;
+              return;
+            }
+            const nextGain = 0.2 + 0.8 * (elapsed / RAMP_MS)
+            console.debug(`[mic] gain ${nextGain}`)
+            ExpoPlayAudioStream.setMicrophoneGain(nextGain);
+          }, TICK_MS);
         }
       );
 
@@ -167,6 +192,11 @@ export default function App() {
 
   const disconnectPipeline = async () => {
     try {
+      if (gainRampRef.current) {
+        clearInterval(gainRampRef.current);
+        gainRampRef.current = undefined;
+        ExpoPlayAudioStream.setMicrophoneGain(1.0);
+      }
       await Pipeline.disconnect();
       pipelineSubsRef.current.forEach((s) => s.remove());
       pipelineSubsRef.current = [];
@@ -257,6 +287,9 @@ export default function App() {
       <Text style={styles.status}>
         Mic: {isRecording ? "recording" : "idle"}
       </Text>
+      {audioLevel && <Text style={styles.status}>
+        Mic: {audioLevel}
+      </Text>}
       {micBands && <BandMeter label="Mic Bands" bands={micBands} />}
 
       {/* ── Pipeline ───────────────────────────────────── */}

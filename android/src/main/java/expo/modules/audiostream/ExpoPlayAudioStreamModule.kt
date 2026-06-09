@@ -168,8 +168,11 @@ class ExpoPlayAudioStreamModule : Module(), EventSender {
         }
 
         Function("toggleSilence") { isSilent: Boolean ->
-            // Just toggle silence without returning any value
             audioRecorderManager.toggleSilence(isSilent)
+        }
+
+        Function("setMicrophoneGain") { gain: Double ->
+            audioRecorderManager.setMicrophoneGain(gain.toFloat())
         }
 
         // ── Native Audio Pipeline V3 ────────────────────────────────────

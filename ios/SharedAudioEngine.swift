@@ -130,9 +130,14 @@ class SharedAudioEngine {
     }
 
     private func configureOnQueue(playbackMode: PlaybackMode) throws {
-        if isConfigured && self.playbackMode == playbackMode && engine?.isRunning == true {
+        let needsVP = playbackMode == .conversation || playbackMode == .voiceProcessing
+        let vpActive = !needsVP || (engine?.inputNode.isVoiceProcessingEnabled == true)
+        if isConfigured && self.playbackMode == playbackMode && engine?.isRunning == true && vpActive {
             Logger.debug("[\(SharedAudioEngine.TAG)] Already configured for \(playbackMode) and engine running, skipping")
             return
+        }
+        if isConfigured && !vpActive {
+            Logger.debug("[\(SharedAudioEngine.TAG)] Voice processing dropped (setCategory side-effect) — forcing reconfiguration")
         }
 
         if isConfigured && engine?.isRunning != true {
@@ -151,7 +156,6 @@ class SharedAudioEngine {
         // Done before connecting nodes so the audio graph incorporates VP from the start.
         if playbackMode == .conversation || playbackMode == .voiceProcessing {
             try engine.inputNode.setVoiceProcessingEnabled(true)
-            try engine.outputNode.setVoiceProcessingEnabled(true)
             Logger.debug("[\(SharedAudioEngine.TAG)] Voice processing enabled")
         }
 
@@ -270,7 +274,6 @@ class SharedAudioEngine {
         if playbackMode == .conversation || playbackMode == .voiceProcessing {
             if let engine = engine {
                 try? engine.inputNode.setVoiceProcessingEnabled(false)
-                try? engine.outputNode.setVoiceProcessingEnabled(false)
             }
         }
 
@@ -350,7 +353,6 @@ class SharedAudioEngine {
             if playbackMode == .conversation || playbackMode == .voiceProcessing {
                 do {
                     try engine.inputNode.setVoiceProcessingEnabled(true)
-                    try engine.outputNode.setVoiceProcessingEnabled(true)
                 } catch {
                     Logger.debug("[\(SharedAudioEngine.TAG)] Voice processing re-enable failed: \(error)")
                 }

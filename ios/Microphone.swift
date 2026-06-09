@@ -30,6 +30,9 @@ class Microphone: SharedAudioEngineDelegate {
 
     private var isRecording: Bool = false
     private var isSilent: Bool = false
+    // Read on the audio render thread, written from the JS thread.
+    // Float is 4 bytes / naturally aligned — atomic on ARM64, no lock needed.
+    private var micGain: Float = 1.0
     private var frequencyBandAnalyzer: FrequencyBandAnalyzer?
     private var frequencyBandConfig: (lowCrossoverHz: Float, highCrossoverHz: Float)?
 
@@ -124,6 +127,10 @@ class Microphone: SharedAudioEngineDelegate {
         self.isSilent = isSilent
     }
 
+    func setMicrophoneGain(_ gain: Float) {
+        micGain = max(0.0, min(1.0, gain))
+    }
+
     func startRecording(settings: RecordingSettings, intervalMilliseconds: Int,
                         frequencyBandConfig: (lowCrossoverHz: Float, highCrossoverHz: Float)? = nil) -> StartRecordingResult? {
         guard !isRecording else {
@@ -213,12 +220,27 @@ class Microphone: SharedAudioEngineDelegate {
         let hardwareFormat = inputNode.inputFormat(forBus: 0)
         recordingSettings?.sampleRate = hardwareFormat.sampleRate
 
+        // outputFormat is what the tap actually receives — under VoiceProcessingIO
+        // this may differ from inputFormat (VP may output at a different rate and
+        // adds internal metadata channels beyond channel 0).
+        let nodeOutputFormat = inputNode.outputFormat(forBus: 0)
+
         let intervalSamples = AVAudioFrameCount(
-            Double(intervalMilliseconds) / 1000.0 * hardwareFormat.sampleRate
+            Double(intervalMilliseconds) / 1000.0 * nodeOutputFormat.sampleRate
         )
         let tapBufferSize = max(intervalSamples, 256)
 
-        inputNode.installTap(onBus: 0, bufferSize: tapBufferSize, format: nil) { [weak self] (buffer, time) in
+        // Explicit mono Float32 format strips VP metadata channels. Passing format: nil
+        // here would deliver the raw VP output channels, corrupting the audio stream
+        // with echo-tracking metadata that bleeds into downstream processing.
+        let tapFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: nodeOutputFormat.sampleRate,
+            channels: 1,
+            interleaved: false
+        )
+
+        inputNode.installTap(onBus: 0, bufferSize: tapBufferSize, format: tapFormat) { [weak self] (buffer, time) in
             guard let self = self else { return }
             guard buffer.frameLength > 0 else {
                 Logger.debug("[Microphone] Received empty buffer in tap callback")
@@ -288,7 +310,7 @@ class Microphone: SharedAudioEngineDelegate {
             var int16Data = Data(capacity: frameCount * channelCount * 2)
             for frame in 0..<frameCount {
                 for ch in 0..<channelCount {
-                    let sample = max(-1.0, min(1.0, floatData[ch][frame]))
+                    let sample = max(-1.0, min(1.0, floatData[ch][frame] * micGain))
                     var int16Sample = Int16(sample * 32767.0)
                     int16Data.append(Data(bytes: &int16Sample, count: 2))
                 }

@@ -36,6 +36,7 @@ class AudioRecorderManager(
 
     // Flag to control whether actual audio data or silence is sent
     private var isSilent = false
+    @Volatile private var micGain: Float = 1.0f
     private var frequencyBandAnalyzer: FrequencyBandAnalyzer? = null
     private val gainNormalizer = GainNormalizer()
 
@@ -154,9 +155,10 @@ class AudioRecorderManager(
         // Generate a unique ID for this recording stream
         streamUuid = java.util.UUID.randomUUID().toString()
 
-        audioRecord?.startRecording()
-        // Apply audio effects after starting recording using the manager
+        // AEC and other effects must be attached before startRecording() so the
+        // hardware echo canceller processes audio from the very first captured frame.
         audioRecord?.let { audioEffectsManager.setupAudioEffects(it) }
+        audioRecord?.startRecording()
 
         isPaused.set(false)
         isRecording.set(true)
@@ -385,8 +387,11 @@ class AudioRecorderManager(
     }
 
     private fun emitAudioData(audioData: ByteArray, length: Int) {
-        // If silent mode is active, replace audioData with zeros (using concise expression)
-        val dataToEncode = if (isSilent) ByteArray(length) else audioData
+        val dataToEncode = when {
+            isSilent -> ByteArray(length)
+            micGain != 1.0f -> applyMicGain(audioData, length, micGain)
+            else -> audioData
+        }
 
         val encodedBuffer = audioDataEncoder.encodeToBase64(dataToEncode)
 
@@ -471,6 +476,25 @@ class AudioRecorderManager(
     /**
      * Toggles between sending actual audio data and silence
      */
+    fun setMicrophoneGain(gain: Float) {
+        micGain = gain.coerceIn(0.0f, 1.0f)
+    }
+
+    private fun applyMicGain(data: ByteArray, length: Int, gain: Float): ByteArray {
+        val result = ByteArray(length)
+        var i = 0
+        while (i + 1 < length) {
+            val lo = data[i].toInt() and 0xFF
+            val hi = data[i + 1].toInt()       // sign-extends
+            val sample = (hi shl 8) or lo      // little-endian Int16
+            val scaled = (sample * gain).toInt().coerceIn(-32768, 32767)
+            result[i]     = (scaled and 0xFF).toByte()
+            result[i + 1] = (scaled shr 8).toByte()
+            i += 2
+        }
+        return result
+    }
+
     fun toggleSilence(isSilent: Boolean) {
         this.isSilent = isSilent
         Log.d(Constants.TAG, "Silence mode toggled: $isSilent")

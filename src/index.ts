@@ -185,6 +185,14 @@ export class ExpoPlayAudioStream {
   }
 
   /**
+   * Sets the microphone capture gain (0.0 = silent, 1.0 = full).
+   * Takes effect immediately on the next captured audio chunk.
+   */
+  static setMicrophoneGain(gain: number) {
+    ExpoPlayAudioStreamModule.setMicrophoneGain(Math.max(0, Math.min(1, gain)));
+  }
+
+  /**
    * Requests microphone permission from the user.
    * @returns {Promise<{granted: boolean, canAskAgain?: boolean, status?: string}>} A promise that resolves to the permission result.
    */

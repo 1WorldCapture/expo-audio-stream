@@ -69,8 +69,18 @@ class AudioPipeline: SharedAudioEngineDelegate {
     private var outputFormat: AVAudioFormat?
     private var jitterBuffer: JitterBuffer?
 
-    /// Number of interleaved Int16 samples per scheduled buffer.
+    /// Number of interleaved Int16 samples read from the JitterBuffer per scheduled buffer
+    /// (at pipeline sample rate, e.g. 16 kHz).
     let frameSizeSamples: Int
+
+    /// Hardware output sample rate — read at connect time from the engine's output node.
+    /// The player node connects at this rate so AVAudioEngine injects no hidden resampler,
+    /// keeping the AEC echo reference deterministically timed.
+    private var hardwareSampleRate: Double = 48000
+
+    /// Number of frames written to the hardware-rate PCM buffer per scheduled buffer.
+    /// Always >= frameSizeSamples; computed as hardwareSampleRate / 50 (20 ms chunks).
+    private var hwFramesPerBuffer: Int = 960
 
     // ── Threading / state ───────────────────────────────────────────────
     private var running = false
@@ -178,10 +188,21 @@ class AudioPipeline: SharedAudioEngineDelegate {
             // (ensureAudioSessionInitialized). Just ensure it's active.
             try AVAudioSession.sharedInstance().setActive(true)
 
-            // ── 4. Create format and attach player node to shared engine ─
+            // ── 4. Read hardware rate and create hardware-rate format ───
+            // Connecting at the native hardware rate prevents AVAudioEngine from
+            // injecting a hidden resampler between the player node and the hardware
+            // output. A hidden resampler shifts buffer timestamps and desynchronises
+            // the AEC echo reference, causing the adaptive filter to converge slowly
+            // or not at all. The scheduling loop handles the 16kHz→48kHz conversion
+            // via linear interpolation before handing buffers to the player node.
+            let rawHwRate = sharedEngine.engine?.outputNode.outputFormat(forBus: 0).sampleRate ?? 0
+            let resolvedHwRate = rawHwRate > 0 ? rawHwRate : 48000
+            hardwareSampleRate = resolvedHwRate
+            hwFramesPerBuffer = max(1, Int(resolvedHwRate / 50.0))
+
             guard let format = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
-                sampleRate: Double(sampleRate),
+                sampleRate: resolvedHwRate,
                 channels: AVAudioChannelCount(channelCount),
                 interleaved: false
             ) else {
@@ -219,8 +240,9 @@ class AudioPipeline: SharedAudioEngineDelegate {
             startFrequencyBandTimer()
 
             setState(.idle)
-            Logger.debug("[\(AudioPipeline.TAG)] Connected — sampleRate=\(sampleRate) " +
-                "ch=\(channelCount) frameSamples=\(frameSizeSamples) " +
+            Logger.debug("[\(AudioPipeline.TAG)] Connected — pipelineRate=\(sampleRate) " +
+                "hwRate=\(Int(resolvedHwRate)) ch=\(channelCount) " +
+                "pipelineFrames=\(frameSizeSamples) hwFrames=\(hwFramesPerBuffer) " +
                 "targetBuffer=\(targetBufferMs)ms")
     }
 
@@ -311,14 +333,27 @@ class AudioPipeline: SharedAudioEngineDelegate {
         // Old node is invalid (detached during teardown). Create a fresh one.
         scheduleGeneration += 1
 
-        guard let sharedEngine = sharedEngine,
-              let format = AVAudioFormat(
-                  commonFormat: .pcmFormatFloat32,
-                  sampleRate: Double(sampleRate),
-                  channels: AVAudioChannelCount(channelCount),
-                  interleaved: false
-              ) else {
-            Logger.debug("[\(AudioPipeline.TAG)] engineDidRebuild — cannot create format or engine missing, treating as dead")
+        guard let sharedEngine = sharedEngine else {
+            Logger.debug("[\(AudioPipeline.TAG)] engineDidRebuild — engine missing, treating as dead")
+            running = false
+            setState(.error)
+            listener?.onError(code: "ENGINE_DIED", message: "Failed to recreate audio node after engine rebuild")
+            return
+        }
+
+        // Re-read hardware rate from the new engine (route may have changed).
+        let rawHwRate = sharedEngine.engine?.outputNode.outputFormat(forBus: 0).sampleRate ?? 0
+        let resolvedHwRate = rawHwRate > 0 ? rawHwRate : hardwareSampleRate
+        hardwareSampleRate = resolvedHwRate
+        hwFramesPerBuffer = max(1, Int(resolvedHwRate / 50.0))
+
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: resolvedHwRate,
+            channels: AVAudioChannelCount(channelCount),
+            interleaved: false
+        ) else {
+            Logger.debug("[\(AudioPipeline.TAG)] engineDidRebuild — cannot create format, treating as dead")
             running = false
             setState(.error)
             listener?.onError(code: "ENGINE_DIED", message: "Failed to recreate audio node after engine rebuild")
@@ -540,28 +575,35 @@ class AudioPipeline: SharedAudioEngineDelegate {
             }
         }
 
-        // Convert to non-interleaved Float32 for AVAudioEngine
-        let framesPerBuffer = frameSizeSamples / channelCount
+        // Build a hardware-rate PCM buffer. The scheduling loop resamples from
+        // pipeline rate (e.g. 16 kHz) to hardware rate (e.g. 48 kHz) so the
+        // player node connects at the native rate and the engine never inserts a
+        // hidden resampler that would desynchronise the AEC echo reference.
+        let pipelineFrames = frameSizeSamples / channelCount  // frames at pipeline rate
+        let hwFrames       = hwFramesPerBuffer                 // frames at hardware rate
         guard let pcmBuffer = AVAudioPCMBuffer(
             pcmFormat: format,
-            frameCapacity: AVAudioFrameCount(framesPerBuffer)
+            frameCapacity: AVAudioFrameCount(hwFrames)
         ) else { return }
-        pcmBuffer.frameLength = AVAudioFrameCount(framesPerBuffer)
+        pcmBuffer.frameLength = AVAudioFrameCount(hwFrames)
 
         if let channelData = pcmBuffer.floatChannelData {
             if isInterrupted {
-                // Write silence during interruption
                 for ch in 0..<channelCount {
-                    for i in 0..<framesPerBuffer {
-                        channelData[ch][i] = 0
-                    }
+                    for i in 0..<hwFrames { channelData[ch][i] = 0 }
                 }
             } else {
-                // De-interleave Int16 → non-interleaved Float32
-                for frame in 0..<framesPerBuffer {
+                // Linear interpolation: pipeline rate → hardware rate
+                let ratio = hardwareSampleRate / Double(sampleRate)
+                for i in 0..<hwFrames {
+                    let virtualIndex = Double(i) / ratio
+                    let indexLow  = Int(virtualIndex)
+                    let indexHigh = min(indexLow + 1, pipelineFrames - 1)
+                    let weight    = Float(virtualIndex - Double(indexLow))
                     for ch in 0..<channelCount {
-                        let sampleIndex = frame * channelCount + ch
-                        channelData[ch][frame] = Float(renderSamples[sampleIndex]) / 32768.0
+                        let sampleLow  = Float(renderSamples[indexLow  * channelCount + ch]) / 32768.0
+                        let sampleHigh = Float(renderSamples[indexHigh * channelCount + ch]) / 32768.0
+                        channelData[ch][i] = sampleLow + weight * (sampleHigh - sampleLow)
                     }
                 }
             }
