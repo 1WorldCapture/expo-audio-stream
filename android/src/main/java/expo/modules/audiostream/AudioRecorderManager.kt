@@ -30,9 +30,19 @@ class AudioRecorderManager(
     private var totalRecordedTime: Long = 0
     private var totalDataSize = 0
     private var pausedDuration = 0L
-    private var lastEmittedSize = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val audioRecordLock = Any()
+
+    // ── Capture/processing decoupling ───────────────────────────────────────
+    // The capture thread does nothing but read() + count + enqueue, so it can
+    // always drain the HAL ring buffer at full speed (no DSP/encode/bridge work
+    // in its path). A separate processing thread encodes, analyzes, and posts to
+    // JS. If processing lags, only *emission* is delayed — captured audio is
+    // already counted in totalDataSize and safe in the queue, so no samples are
+    // lost and PCM drift stays flat under stress.
+    private class CapturedChunk(val bytes: ByteArray, val length: Int, val fromOffset: Long)
+    private var processingThread: Thread? = null
+    private val chunkQueue = java.util.concurrent.LinkedBlockingQueue<CapturedChunk>()
 
     // Flag to control whether actual audio data or silence is sent
     private var isSilent = false
@@ -43,6 +53,13 @@ class AudioRecorderManager(
     private lateinit var recordingConfig: RecordingConfig
     private var mimeType = "audio/wav"
     private var audioFormat: Int = AudioFormat.ENCODING_PCM_16BIT
+
+    private companion object {
+        /** Ring-buffer slack as a multiple of one read interval (and of minBuf).
+         *  ~4 intervals ≈ 400ms of headroom to absorb scheduling stalls without
+         *  overrunning the HAL buffer and dropping samples. */
+        const val RING_BUFFER_INTERVALS = 4
+    }
 
     /**
      * Validates the recording state by checking permission and recording status
@@ -135,11 +152,16 @@ class AudioRecorderManager(
         readSizeInBytes = intervalBytes
 
         // AudioRecord's internal ring buffer must be >= getMinBufferSize.
-        // Make it large enough to hold at least one full read, too.
+        // Size it for several reads of slack — not just one — so a scheduling
+        // stall (GC pause, pipeline-connect hitch, the MAX_PRIORITY playback
+        // writer preempting us) doesn't overrun the HAL ring buffer and drop
+        // captured samples. Dropped samples are permanent loss and show up as
+        // accumulating PCM drift. The extra headroom adds no latency: we still
+        // read exactly one interval per read() call.
         val channelConfig = if (recordingConfig.channels == 1) AudioFormat.CHANNEL_IN_MONO
             else AudioFormat.CHANNEL_IN_STEREO
         val minBuf = AudioRecord.getMinBufferSize(recordingConfig.sampleRate, channelConfig, audioFormat)
-        bufferSizeInBytes = maxOf(intervalBytes, minBuf)
+        bufferSizeInBytes = maxOf(intervalBytes * RING_BUFFER_INTERVALS, minBuf * RING_BUFFER_INTERVALS)
         Log.d(Constants.TAG, "Interval: ${recordingConfig.interval}ms, readSize: $readSizeInBytes, ringBuffer: $bufferSizeInBytes (minBuf=$minBuf)")
 
         // Initialize the AudioRecord if it's a new recording or if it's not currently paused
@@ -168,15 +190,22 @@ class AudioRecorderManager(
                 System.currentTimeMillis() // Only reset start time if it's not a resume
         }
 
-        recordingThread = Thread { recordingProcess() }.apply { start() }
-
-        // Create frequency band analyzer
+        // Create frequency band analyzer before starting the processing thread
+        // (the worker consumes it) to avoid a startup race.
         val bandConfig = options["frequencyBandConfig"] as? Map<*, *>
         frequencyBandAnalyzer = FrequencyBandAnalyzer(
             sampleRate = recordingConfig.sampleRate,
             lowCrossoverHz = (bandConfig?.get("lowCrossoverHz") as? Number)?.toFloat() ?: 300f,
             highCrossoverHz = (bandConfig?.get("highCrossoverHz") as? Number)?.toFloat() ?: 2000f
         )
+
+        // Discard any chunks left over from a previous (aborted) session.
+        chunkQueue.clear()
+
+        // Capture thread only reads + enqueues; processing thread does the heavy
+        // encode/analyze/emit work so the capture path can never be throttled.
+        processingThread = Thread { processingLoop() }.apply { start() }
+        recordingThread = Thread { recordingProcess() }.apply { start() }
 
         val result = bundleOf(
             "fileUri" to "",
@@ -198,10 +227,14 @@ class AudioRecorderManager(
      */
     private fun cleanupResources() {
         try {
+            // Signal both loops to stop before tearing anything down.
+            isRecording.set(false)
+
             // Release audio effects
             audioEffectsManager.releaseAudioEffects()
 
-            // Stop and release AudioRecord if exists
+            // Stop and release AudioRecord if exists. Stopping unblocks the
+            // capture thread's read() so it can exit.
             if (audioRecord != null) {
                 try {
                     if (audioRecord!!.state == AudioRecord.STATE_INITIALIZED) {
@@ -219,19 +252,21 @@ class AudioRecorderManager(
                 audioRecord = null
             }
 
-            // Interrupt and clear recording thread
+            // Interrupt capture + processing threads (the processing thread may be
+            // blocked in chunkQueue.take()); then drop any unprocessed tail chunks.
             recordingThread?.interrupt()
             recordingThread = null
+            processingThread?.interrupt()
+            processingThread = null
+            chunkQueue.clear()
 
             // Always reset state
-            isRecording.set(false)
             isPaused.set(false)
             totalRecordedTime = 0
             pausedDuration = 0
             totalDataSize = 0
             streamUuid = null
             frequencyBandAnalyzer = null
-            lastEmittedSize = 0
 
             Log.d(Constants.TAG, "Audio resources cleaned up")
         } catch (e: Exception) {
@@ -248,12 +283,15 @@ class AudioRecorderManager(
             }
 
             try {
-                // Read any final audio data
+                // Read any final audio data and emit it directly (the processing
+                // thread is about to be torn down). copyOf so emit owns the bytes.
                 val audioData = ByteArray(bufferSizeInBytes)
                 val bytesRead = audioRecord?.read(audioData, 0, bufferSizeInBytes) ?: -1
                 Log.d(Constants.TAG, "Last Read $bytesRead bytes")
                 if (bytesRead > 0) {
-                    emitAudioData(audioData, bytesRead)
+                    val fromOffset = totalDataSize.toLong()
+                    totalDataSize += bytesRead
+                    emitAudioData(audioData.copyOf(bytesRead), bytesRead, fromOffset)
                 }
 
                 // Generate result before cleanup
@@ -299,6 +337,10 @@ class AudioRecorderManager(
     }
 
     private fun recordingProcess() {
+        // Run the capture loop at urgent-audio priority so it isn't starved by
+        // the pipeline's MAX_PRIORITY playback writer (or other load) — starvation
+        // here means missed drain windows and dropped capture samples.
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         Log.i(Constants.TAG, "Starting recording process, readSize=$readSizeInBytes, ringBuffer=$bufferSizeInBytes")
         val audioData = ByteArray(readSizeInBytes)
         var consecutiveErrors = 0
@@ -333,10 +375,12 @@ class AudioRecorderManager(
 
                 if (bytesRead > 0) {
                     consecutiveErrors = 0
-                    gainNormalizer.apply(audioData, bytesRead)
+                    // Snapshot the pre-chunk offset, advance the counter, and hand
+                    // a COPY to the processing thread. Counting here (not at emit
+                    // time) keeps PCM accounting accurate even if emission lags.
+                    val fromOffset = totalDataSize.toLong()
                     totalDataSize += bytesRead
-                    // Emit immediately — each read is one interval of audio
-                    emitAudioData(audioData, bytesRead)
+                    chunkQueue.put(CapturedChunk(audioData.copyOf(bytesRead), bytesRead, fromOffset))
                 } else if (bytesRead < 0) {
                     consecutiveErrors++
                     if (consecutiveErrors >= 10) {
@@ -346,9 +390,30 @@ class AudioRecorderManager(
                     }
                 }
             }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         } catch (e: Exception) {
             Log.e(Constants.TAG, "Recording thread crashed", e)
             emitRecordingError("RECORDING_CRASH", e.message ?: "Recording thread unexpected error", isFatal = true)
+        }
+    }
+
+    /**
+     * Processing thread: drains captured chunks and does all the heavy work
+     * (gain normalization, silence/gain, base64 encode, power level, frequency
+     * bands, JS-bridge post). Kept off the capture thread so a slow bridge or DSP
+     * spike delays emission instead of stalling capture and dropping samples.
+     */
+    private fun processingLoop() {
+        try {
+            while (isRecording.get() && !Thread.currentThread().isInterrupted) {
+                val chunk = chunkQueue.take() // blocks until a chunk is available
+                emitAudioData(chunk.bytes, chunk.length, chunk.fromOffset)
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } catch (e: Exception) {
+            Log.e(Constants.TAG, "Processing thread crashed", e)
         }
     }
 
@@ -386,7 +451,17 @@ class AudioRecorderManager(
         }
     }
 
-    private fun emitAudioData(audioData: ByteArray, length: Int) {
+    /**
+     * Runs on the processing thread. [audioData] is this chunk's private copy
+     * (safe to mutate) and [fromOffset] is the cumulative byte offset *before*
+     * this chunk, snapshotted on the capture thread — so per-chunk position and
+     * totalSize stay correct regardless of how far the live counter has advanced.
+     */
+    private fun emitAudioData(audioData: ByteArray, length: Int, fromOffset: Long) {
+        // Gain normalization was previously done inline on the capture thread;
+        // it now runs here so the capture path stays lean.
+        gainNormalizer.apply(audioData, length)
+
         val dataToEncode = when {
             isSilent -> ByteArray(length)
             micGain != 1.0f -> applyMicGain(audioData, length, micGain)
@@ -395,9 +470,7 @@ class AudioRecorderManager(
 
         val encodedBuffer = audioDataEncoder.encodeToBase64(dataToEncode)
 
-        val from = lastEmittedSize
-        val deltaSize = totalDataSize.toLong() - lastEmittedSize
-        lastEmittedSize = totalDataSize.toLong()
+        val from = fromOffset
 
         // Calculate position in milliseconds
         val positionInMs = (from * 1000) / (recordingConfig.sampleRate * recordingConfig.channels * (if (recordingConfig.encoding == "pcm_8bit") 8 else 16) / 8)
@@ -431,7 +504,7 @@ class AudioRecorderManager(
                             "mid" to (bands?.mid ?: 0f),
                             "high" to (bands?.high ?: 0f)
                         ),
-                        "totalSize" to totalDataSize.toLong(),
+                        "totalSize" to (from + length),
                         "streamUuid" to streamUuid
                     )
                 )

@@ -12,7 +12,7 @@ import type {
 import type { EventSubscription } from "expo-modules-core";
 import { MicrophoneErrorEvent } from "@edkimmel/expo-audio-stream/types";
 
-const ANDROID_SAMPLE_RATE = 24000;
+const ANDROID_SAMPLE_RATE = 16000;
 const IOS_SAMPLE_RATE = 24000;
 const CHANNELS = 1;
 const ENCODING = "pcm_16bit";
@@ -55,6 +55,10 @@ export default function App() {
     undefined
   );
   const recordingStartRef = useRef<number | null>(null);
+  // Drift anchor: stamped from the FIRST audio packet (clock + cumulative bytes)
+  // so startup latency (route switch, AEC init, AudioRecord warmup) is excluded
+  // and the meter shows only drift *accumulation* under stress.
+  const driftAnchorRef = useRef<{ clock: number; bytes: number } | null>(null);
   const recordingSampleRateRef = useRef<number>(24000);
 
   const pipelineSubsRef = useRef<{ remove: () => void }[]>([]);
@@ -82,9 +86,16 @@ export default function App() {
     setAudioLevel(audio.soundLevel ?? -180);
 
     if (recordingStartRef.current !== null) {
-      const clockSec = (Date.now() - recordingStartRef.current) / 1000;
       const bytesPerSample = 2; // pcm_16bit = 2 bytes
-      const pcmSec = audio.totalSize / (recordingSampleRateRef.current * CHANNELS * bytesPerSample);
+      const byteRate = recordingSampleRateRef.current * CHANNELS * bytesPerSample;
+      // Anchor on the first packet so the constant startup offset is removed and
+      // only accumulating drift/steps show up.
+      if (driftAnchorRef.current === null) {
+        driftAnchorRef.current = { clock: Date.now(), bytes: audio.totalSize };
+      }
+      const anchor = driftAnchorRef.current;
+      const clockSec = (Date.now() - anchor.clock) / 1000;
+      const pcmSec = (audio.totalSize - anchor.bytes) / byteRate;
       const driftSec = pcmSec - clockSec;
       const driftPct = clockSec > 0 ? (driftSec / clockSec) * 100 : 0;
       setDriftMetrics({ clockSec, pcmSec, driftSec, driftPct });
@@ -286,6 +297,7 @@ export default function App() {
           console.log("Recording started:", JSON.stringify(recordingResult));
           eventListenerSubscriptionRef.current = subscription;
           recordingStartRef.current = Date.now();
+          driftAnchorRef.current = null; // re-anchor on first packet of this session
           recordingSampleRateRef.current = sampleRate;
           setDriftMetrics(null);
           setIsRecording(true);
@@ -300,6 +312,7 @@ export default function App() {
           eventListenerSubscriptionRef.current?.remove();
           eventListenerSubscriptionRef.current = undefined;
           recordingStartRef.current = null;
+          driftAnchorRef.current = null;
           setIsRecording(false);
           setIsSilenced(false);
           setMicBands(null);
