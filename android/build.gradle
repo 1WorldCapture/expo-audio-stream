@@ -2,8 +2,8 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 apply plugin: 'maven-publish'
 
-group = 'expo.modules.audiostream'
-version = '0.1.0'
+group = 'com.oneworldcapture.expo.audiostream'
+version = '1.0.1-1worldcapture.0'
 
 buildscript {
   def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
@@ -70,7 +70,7 @@ android {
     minSdkVersion safeExtGet("minSdkVersion", 24)
     targetSdkVersion safeExtGet("targetSdkVersion", 35)
     versionCode 1
-    versionName "0.1.0"
+    versionName "1.0.1-1worldcapture.0"
   }
   lint {
     abortOnError false

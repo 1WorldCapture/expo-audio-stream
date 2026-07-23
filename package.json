@@ -1,6 +1,6 @@
 {
-  "name": "@edkimmel/expo-audio-stream",
-  "version": "1.0.0",
+  "name": "@1worldcapture/expo-audio-stream",
+  "version": "1.0.1-1worldcapture.0",
   "description": "Expo Play Audio Stream module",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -22,13 +22,13 @@
     "expo-play-audio-stream",
     "ExpoPlayAudioStream"
   ],
-  "repository": "https://github.com/edkimmel/expo-audio-stream",
+  "repository": "https://github.com/1WorldCapture/expo-audio-stream",
   "bugs": {
-    "url": "https://github.com/edkimmel/expo-audio-stream/issues"
+    "url": "https://github.com/1WorldCapture/expo-audio-stream/issues"
   },
   "author": "pax <nzpopa@users.noreply.github.com> (https://github.com/hyphen-id)",
   "license": "MIT",
-  "homepage": "https://github.com/edkimmel/expo-audio-stream#readme",
+  "homepage": "https://github.com/1WorldCapture/expo-audio-stream#readme",
   "devDependencies": {
     "@types/react": "^19.0.0",
     "expo-module-scripts": "^4.0.0",
