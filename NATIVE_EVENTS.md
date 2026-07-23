@@ -97,7 +97,7 @@ called. Apps using the `AudioData` error variant continue to work unchanged.
 **JS response:**
 
 ```typescript
-import { addMicrophoneErrorListener } from "@edkimmel/expo-audio-stream"
+import { addMicrophoneErrorListener } from "@1worldcapture/expo-audio-stream"
 
 const sub = addMicrophoneErrorListener((error) => {
   if (error.isFatal) {

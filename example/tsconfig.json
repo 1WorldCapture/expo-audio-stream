@@ -5,10 +5,10 @@
     "allowJs": true,
     "jsx": "react-native",
     "paths": {
-      "@edkimmel/expo-audio-stream": [
+      "@1worldcapture/expo-audio-stream": [
         "../src/index"
       ],
-      "@edkimmel/expo-audio-stream/*": [
+      "@1worldcapture/expo-audio-stream/*": [
         "../src/*"
       ]
     }

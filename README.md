@@ -1,11 +1,16 @@
-# @edkimmel/expo-audio-stream
+# @1worldcapture/expo-audio-stream
+
+This is the 1WorldCapture-maintained fork used by Qwen Realtime App. Release
+`1.0.1-1worldcapture.0` keeps the upstream 1.0.0 audio behavior and adds Expo
+SDK 57 / React Native 0.86 Android compatibility. The native module and
+JavaScript API remain backward-compatible with the upstream package.
 
 Native audio recording and low-latency playback for Expo/React Native. Designed for real-time voice AI applications: microphone capture, chunked PCM playback, and a jitter-buffered native pipeline for streaming audio from AI backends.
 
 ## Install
 
 ```bash
-npx expo install @edkimmel/expo-audio-stream
+npm install @1worldcapture/expo-audio-stream@github:1WorldCapture/expo-audio-stream#v1.0.1-1worldcapture.0
 ```
 
 ## Quick Start
@@ -13,7 +18,7 @@ npx expo install @edkimmel/expo-audio-stream
 ### Microphone Recording
 
 ```typescript
-import { ExpoPlayAudioStream } from "@edkimmel/expo-audio-stream";
+import { ExpoPlayAudioStream } from "@1worldcapture/expo-audio-stream";
 
 const { recordingResult, subscription } =
   await ExpoPlayAudioStream.startMicrophone({
@@ -46,7 +51,7 @@ For playing base64-encoded PCM audio in a queue with turn management:
 import {
   ExpoPlayAudioStream,
   EncodingTypes,
-} from "@edkimmel/expo-audio-stream";
+} from "@1worldcapture/expo-audio-stream";
 
 await ExpoPlayAudioStream.setSoundConfig({
   sampleRate: 24000,
@@ -71,7 +76,7 @@ const sub = ExpoPlayAudioStream.subscribeToSoundChunkPlayed(async (e) => {
 The `Pipeline` class provides jitter-buffered, low-latency playback with a native write thread. Use this for streaming audio from AI backends over WebSockets.
 
 ```typescript
-import { Pipeline } from "@edkimmel/expo-audio-stream";
+import { Pipeline } from "@1worldcapture/expo-audio-stream";
 
 // Connect with desired config
 const result = await Pipeline.connect({
@@ -307,7 +312,7 @@ import {
   PlaybackModes,           // { REGULAR, VOICE_PROCESSING, CONVERSATION }
   AudioEvents,             // { AudioData, SoundChunkPlayed, SoundStarted, DeviceReconnected }
   SuspendSoundEventTurnId, // "suspend-sound-events" -- suppresses playback events
-} from "@edkimmel/expo-audio-stream";
+} from "@1worldcapture/expo-audio-stream";
 ```
 
 ## Platform Notes

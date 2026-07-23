@@ -5,6 +5,21 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
+"@1worldcapture/expo-audio-stream@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "@1worldcapture/expo-audio-stream@workspace:."
+  dependencies:
+    "@types/react": "npm:^19.0.0"
+    expo-module-scripts: "npm:^4.0.0"
+    expo-modules-core: "npm:^2.2.0"
+    husky: "npm:^9.0.11"
+  peerDependencies:
+    expo: "*"
+    react: "*"
+    react-native: "*"
+  languageName: unknown
+  linkType: soft
+
 "@ampproject/remapping@npm:^2.2.0":
   version: 2.3.0
   resolution: "@ampproject/remapping@npm:2.3.0"
@@ -1884,21 +1899,6 @@ __metadata:
   checksum: 10c0/a5a483d2100befbf125793640dec26b90b95fd233a94c19573325898a5ce1e52cdfa96e495c7dcc31b5eca5b66ce3e6d4a0f5a4a62daec271455959f208ab08a
   languageName: node
   linkType: hard
-
-"@edkimmel/expo-audio-stream@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "@edkimmel/expo-audio-stream@workspace:."
-  dependencies:
-    "@types/react": "npm:^19.0.0"
-    expo-module-scripts: "npm:^4.0.0"
-    expo-modules-core: "npm:^2.2.0"
-    husky: "npm:^9.0.11"
-  peerDependencies:
-    expo: "*"
-    react: "*"
-    react-native: "*"
-  languageName: unknown
-  linkType: soft
 
 "@eslint-community/eslint-utils@npm:^4.1.2, @eslint-community/eslint-utils@npm:^4.5.0, @eslint-community/eslint-utils@npm:^4.7.0":
   version: 4.9.0

@@ -19,7 +19,7 @@ config.resolver.nodeModulesPaths = [
 ];
 
 config.resolver.extraNodeModules = {
-  "@edkimmel/expo-audio-stream": "..",
+  "@1worldcapture/expo-audio-stream": "..",
 };
 
 config.watchFolders = [path.resolve(__dirname, "..")];

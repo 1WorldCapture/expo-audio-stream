@@ -2,15 +2,15 @@ import { Button, Platform, ScrollView, StyleSheet, Text, View } from "react-nati
 import {
   ExpoPlayAudioStream,
   Pipeline,
-} from "@edkimmel/expo-audio-stream";
+} from "@1worldcapture/expo-audio-stream";
 import { useEffect, useRef, useState } from "react";
 import { sampleA } from "./samples/sample-a";
 import type {
   AudioDataEvent,
   FrequencyBands,
-} from "@edkimmel/expo-audio-stream";
+} from "@1worldcapture/expo-audio-stream";
 import type { EventSubscription } from "expo-modules-core";
-import { MicrophoneErrorEvent } from "@edkimmel/expo-audio-stream/types";
+import { MicrophoneErrorEvent } from "@1worldcapture/expo-audio-stream/types";
 
 const ANDROID_SAMPLE_RATE = 16000;
 const IOS_SAMPLE_RATE = 24000;
