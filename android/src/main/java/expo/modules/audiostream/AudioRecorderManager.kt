@@ -528,7 +528,7 @@ class AudioRecorderManager(
                         Log.d(Constants.TAG, "Recording stopped during release")
                     }
 
-                    override fun reject(code: String, message: String?, cause: Throwable?) {
+                    override fun reject(code: String?, message: String?, cause: Throwable?) {
                         Log.e(Constants.TAG, "Error stopping recording during release: $message", cause)
                     }
                 }
